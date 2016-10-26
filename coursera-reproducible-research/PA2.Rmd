@@ -1,0 +1,134 @@
+---
+title: "Most Damaging Weather Events"
+author: "ncoutrakon"
+date: "November 18, 2015"
+output: html_document
+---
+
+##Synopsis
+The U.S. National Oceanic and Atmospheric Administration (USNOAA) has compiled a database of major storms and weather events. Part of this database includes injuries and fatalities caused by each storm, as well as an estimate property and crop damages as a result. In this analysis, we look to find out which types of event are the most harmful, economically and to the human population. We found that Tornados, Thunderstorm Winds, and Floods are the most damaging to our economy and population health. In addition, we draw attention to Tsunamis because although infrequent, they can have quite an impact on population health and our economy. We also provide a list of the most damaging events based on economic and population health, respectively.
+
+##Data Processing
+We start by downloading the raw data from the [USNOAA] website and storing it in our workspace.
+```{r download, cache = T}
+sturl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+stfile <- "stormdata.csv"
+        
+if(!file.exists(stfile)) {download.file(sturl, stfile, method = "curl"); stormdownloadDate<- date()}
+if(!exists("stormdf")) stormdf <- read.csv(stfile, stringsAsFactors = F, na.strings = "")
+```
+Wow! That's a lot of data. Notice that the 1million entries in this dataset represent data from across half a century. The easiest way to first dive into this data will be to slice it year by year. To do that, we create another column that specifically indicates the year each event was recorded. Once we do that, we can take a look at how many events were recorded each year to get an idea of the continuity of the recording process.
+``` {r addYear}
+library(ggplot2)
+stormdf$posixtime <- strptime(stormdf[,2], "%m/%d/%Y %H:%M:%S")
+stormdf$year <- as.numeric(format(stormdf$posixtime, "%Y"))
+        
+freqEVTYPE <- setNames(aggregate(stormdf$EVTYPE, list(stormdf$year),
+                        function(x) length(table(x))), c("Year", "Types"))
+qplot(Year, Types, data = freqEVTYPE, ylab = "Types of Events", main = "Event Types Reported")
+```
+
+Looking at that plot, we see that after 2007, the number of different types of events recorded is much more consistent. This actually corresponds to when the National Weather Service consolidated its standards for classifying weather events. This leads us to belive the data after 2007 will be much more consistent and reliable. Not to mention the more recent data will provide more accurate figures for economic and population damages. Let's create a new dataframe to include only data after 2007!
+```{r after2007}
+rstormdf <- stormdf[which(stormdf$year > 2007),] 
+```
+When we analyze the damages on an economic and population basis, we will want to look at total damage per event but also want to keep in mind the frequency of each event. This will help us keep our findings in perspective and also analyize the average effect for each instance of an event. We create a dataframe to keep track of weather event totals below.
+``` {r numEvents}
+nEVTYPES <- setNames(as.data.frame(table(rstormdf$EVTYPE), stringsAsFactors = F),
+                c("Event", "Event Count"))
+nEVTYPES <- nEVTYPES[order(nEVTYPES$'Event Count', decreasing = T),]
+```
+
+
+##Results
+###Economic Damages
+Now lets begin our analysis! We start with by looking at weather damages on Property and Crops. First, we create new variables that hold the multipliers for the numeric entries listed under the CROPDMG and PROPDMG columns. We then create a total damage column that multiplies and sums the damage for each event. With this column, we can tally the total damage caused by each event. We then merge this dataframe with the dataframe indicating the total number of occurences of each event. This will help us with our Averge Damage analysis.
+```{r econdmg}
+library(gridExtra)
+multiplier <- c("0" = 1, K = 10^3, M = 10^6, B = 10^9)
+
+rstormdf$cropmult <-multiplier[rstormdf$CROPDMGEXP]
+rstormdf$propmult <-multiplier[rstormdf$PROPDMGEXP]
+rstormdf$damage <- rstormdf$CROPDMG * rstormdf$cropmult + rstormdf$PROPDMG * rstormdf$propmult
+
+#creates df for total economic damages by event
+econdmg <- setNames(aggregate(rstormdf$damage, list(rstormdf$EVTYPE), sum), c("Event","Damage.USD"))
+econdmg <- merge(econdmg, nEVTYPES)
+econdmg$DMGper <- econdmg$Damage.USD / econdmg$'Event Count' 
+econdmg <- econdmg[order(econdmg$Damage.USD, decreasing = T),]
+econdmg <- transform(econdmg, Event = reorder(Event, Damage.USD))
+     
+```
+Take a look at the plots below.
+```{r econplots, fig.height= 10, fig.width=8}
+eplot1 <- qplot(Event, Damage.USD, data = econdmg, xlab ="", ylab = "Damage ($)", main = "Total Crop and Property Damage")+
+                theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+eplot2 <- qplot(x = reorder(Event, DMGper), DMGper, data = econdmg, xlab ="", ylab = "Damage per Event ($)", 
+                main = "Average Crop and Property Damage")+
+                theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+grid.arrange(eplot1, eplot2, ncol = 1)
+
+```
+
+It looks like the significant events are the ones where the Total Damage is more than 2.5Billion dollars. Also take a look at Tsunamis and Storm Surge/Tide, in the Average Damage chart. Although infrequent, these events can be quite costly. We'll want to note these events in our recommendatoin later.
+``` {r rececon}
+recondmg <- econdmg[which((econdmg$Damage.USD > 2.5*10^9)|(econdmg$Event %in% c("TSUNAMI", "STORM SURGE/TIDE"))),]
+```
+
+###Population Damages
+We'll use the same exact techniques for population analysis, except this time, we are looking at fatalities and injuries. For this analysis, in order to compare the damage of a fatalities to the damage of injury, we arbitrarily chose a ratio of 1 Fatality = .6 Injury. We will then sum up fatalities and injuries into a single metric, which we call evDMG.
+```{r popdmg}
+evfatal <- setNames(aggregate(rstormdf$FATALITIES, list(rstormdf$EVTYPE), sum), c("Event", "Fatalities"))
+evinj <- setNames(aggregate(rstormdf$INJURIES, list(rstormdf$EVTYPE), sum), c("Event", "Injuries"))
+
+popdmg <- merge(evfatal, evinj)
+popdmg <- merge(popdmg, nEVTYPES)
+popdmg$evDMG <- popdmg$Fatalities + .6*popdmg$Injuries
+popdmg$evDMGper <- popdmg$evDMG / popdmg$'Event Count'*100 
+popdmg <- popdmg[order(popdmg$evDMG, decreasing = T),]
+popdmg <- transform(popdmg, Event = reorder(Event, evDMG))
+```
+Immediately, when we look at the first few entries of our dataframe, sorted from most evDMG to least, we see that Tornados have an incredibly damaging total effect on human population. It dwarfs the rest of the top six entries combined. So for the next part of our analysis, we are going to temporarily remove Tornados so we can better analyize the other weather events. Don't worry though, we're going to add it back later!
+``` {r tornado}
+head(popdmg)
+outpopdmg <- popdmg[popdmg$Event != "TORNADO",]
+```
+
+Now, let's plot our dataframes so we can see the total and average effect on population health.
+``` {r popplots, fig.height = 10, fig.width = 8}
+library(gridExtra)
+pplot1 <- qplot(Event, evDMG, data = outpopdmg, ylab = "evDMG", 
+                main = "Total evDMG (Tornados Removed)")+
+                theme(axis.text.x = element_text(angle = 90, hjust = 1))
+pplot2 <- qplot(x = reorder(Event, evDMGper), evDMGper, data = outpopdmg, 
+                ylab = "evDMG per Event", xlab = "Event",
+                main = "Average evDMG (Tornados Removed)")+
+                theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+grid.arrange(pplot1, pplot2, ncol = 1)
+```
+
+Again, note that Tsunamis and Avalanches have been underestimated on a per event basis for population health. We'll include them in our final recommendation. Based on this, its seems like 200 in evDMG is a good cutoff point to imply significance. Let's remove everything else and use only those points as part of our recommendation, including Tornados of course.
+``` {r recpop}
+rpopdmg <- popdmg[which((popdmg$evDMG > 200)| (popdmg$Event %in% c('TSUNAMI', "AVALANCHE"))),]
+```
+
+###Recommendations
+When we look at our final recommendations we see 7 to 10 types of events that each have a significant impact on economic and population health, respectively. Precautionary steps to minimize the impact of these types of events should be taken seriously.
+``` {r econpoprec}
+#worst for the economy
+recondmg
+
+#worst for the population
+rpopdmg
+```
+But we draw special attention to the types of weather events which have shown to have significant impacts on both population and the economy. It is with this that we give our final recommendation to mitigate the effects of Floods, Thunderstorms, Tornados, and Tsunamis.
+``` {r finalrec}
+#worst for the economy AND the population
+combodf <- merge(rpopdmg,recondmg)
+combodf[,c(1,2, 3, 6, 7)]
+```
+
+[USNOAA]: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2

@@ -1,0 +1,73 @@
+#Human Activity Recognition Dataset
+
+##Setup
+Before we begin, there are a few preliminary things we need to do before we can start the analysis. This analysis will require us to use the *melt()* and *cast()* function from the *reshape2* package in R. Also, for importing the data it's best practice to set the *stringsAsFactors* option to *FALSE*. And lastly, dont forget to set the working directory to the folder with the raw data downloaded from: https://d396qusza40orc.cloudfront.net/getdata%2Fprojectfiles%2FUCI%20HAR%20Dataset.zip
+``` {r setup, result = "hide"}
+library(reshape2)
+options(stringsAsFactors = F)
+setwd(".")
+```
+##Loading the Data
+Once we have downloaded the raw zip folder into our working directory, we are simply going to read all of the relevant data files and load them into our workspace. This includes the activity codes, activity_labels.txt, and the list of features, features.txt. The trainning data set and the testing data set have been split into two seperate directories so we can use a simple for loop to pull that data in quickly and load it into our R workspace.
+``` {r load_data, results = "hide"}
+types <- c("test", "train")
+activity <- read.table("activity_labels.txt")
+features <- read.table("features.txt")
+
+for (j in types){
+        jname <- paste(j,"names",sep="") 
+        assign(jname, character())
+        for (i in list.files(paste("./",j, sep = ""), "*.txt")){
+                x <- basename(i)
+                assign(substr(x, 1, nchar(x) - 4),
+                       read.table(paste("./", j,"/", i, sep = "")))
+                assign(jname, c(get(jname), substr(x, 1, nchar(x) - 4))) 
+        }
+}
+```
+Notice that we have also created two character vectors, one for trainning dataset and one for testing, which contain the names of each object we loaded into R. This will help us keep straight later which dataframes pertain to the train and which pertain to the test.
+
+##Creating a Single Dataframe
+Now that we have all of the data loaded, we want to assemble the data from these different files, and merge them into a single dataframe. The best way to do this is to combine the test data into one dataframe and the train data into another. Then later, we can merge these two groups into a single dataframe that includes results for all expirement volunteers. To do this, we are going to loop through our vectors of dataframe names for the train and test sets.
+
+For each dataframe, the first column contains the volunteer ID number, the second column contains the Activity number, and the last 561 columns contain the raw feature measurements.
+```{r merge_file, results = "hide"}
+for (j in types){
+        jname <- get(paste(j,"names",sep=""))
+        assign(paste(j, "df", sep=""), cbind(get(jname[1]), get(jname[3]), get(jname[2])))
+}
+```
+
+Once we have the two datasets, we are going to combine them into a single dataframe and name each column. The first two columns will be named 'ID' and 'Activity' respectively and the last 561 columns will be the names of the variable measurements as listed in the features.txt file, found in our 'features' dataset.
+``` {r merge_df, results = "hide"}
+df <- rbind(traindf, testdf)
+        colnames(df) <- c("ID", "Activity", features[,2])
+```
+
+##Filtering the Data
+Since we are only concerned with the mean and standard deviation (and not the max, min, entropy, etc.) measurements for each variable, we want to filter the columns to only include those features pertaining to the mean and standard deviation. We can use the *grep()* function to find the index of each column that includes a mean or standard deviation measurement.
+
+``` {r filter, results = "hide"}
+mindex <- grep("mean\\(\\)", features[,2])
+stdindex <- grep("std\\(\\)", features[,2])
+df <- cbind(df[,1:2],df[,mindex + 2], df[,stdindex + 2])
+```
+
+##Adding Descriptive Fields
+The Activity column in our dataset is currently numeric. But those numbers just represent a specific activity so it makes sense to include the specific activity, not the number corresponding to that activity, in our dataset. Here, we use the activity dataframe to replace each entry in the Activity column with the corresponding activity. The easiest way to do this is by assigning that column to a factor of itself, with the activity names as the labels.
+``` {r describe, results = "hide"}
+df[,2] <- factor(df[,2], 1:6, activity[,2])
+```
+
+##Consolidating the Data
+In our current dataframe, for each unique combonation of volunteer and activity, there are about 380 measurements for each feature. We want to simplify this and simply include the average measurement for each feature. To do this, we are going to need to melt our data into long form, conduct the mean calculation, and the cast the data back into wide form.
+``` {r melt_cast, results = "hide"}
+df <- melt(df, id.vars = c("ID", "Activity"), measure.vars = c(-1,-2))
+avedf <- dcast(df, ID + Activity ~ variable, mean)
+```
+
+##Exporting the Data
+Finally, once we have our tidy dataset with the measurements that we want, we can export it as a .txt file for others to use.
+``` {r export, results = "hide"}
+write.table(avedf, file = "tidydata.txt", row.names = F)
+```
